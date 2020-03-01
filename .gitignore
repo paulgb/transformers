@@ -8,6 +8,10 @@ __pycache__/
 # C extensions
 *.so
 
+cached_*
+merges.txt
+vocab.json
+
 # Distribution / packaging
 .Python
 build/

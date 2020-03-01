@@ -403,6 +403,7 @@ def compute_predictions_logits(
     all_nbest_json = collections.OrderedDict()
     scores_diff_json = collections.OrderedDict()
 
+    print('[')
     for (example_index, example) in enumerate(all_examples):
         features = example_index_to_features[example_index]
 
@@ -416,6 +417,15 @@ def compute_predictions_logits(
             result = unique_id_to_result[feature.unique_id]
             start_indexes = _get_best_indexes(result.start_logits, n_best_size)
             end_indexes = _get_best_indexes(result.end_logits, n_best_size)
+
+            print(json.dumps({
+                'example_id': example.qas_id,
+                'feature_index': feature_index,
+                'tokens': feature.tokens,
+                'start_logits': result.start_logits[:len(feature.tokens)],
+                'end_logits': result.end_logits[:len(feature.tokens)],
+            }+','))
+
             # if we could have irrelevant answers, get the min score of irrelevant
             if version_2_with_negative:
                 feature_null_score = result.start_logits[0] + result.end_logits[0]
@@ -554,6 +564,7 @@ def compute_predictions_logits(
                 all_predictions[example.qas_id] = best_non_null_entry.text
         all_nbest_json[example.qas_id] = nbest_json
 
+    print(']')
     with open(output_prediction_file, "w") as writer:
         writer.write(json.dumps(all_predictions, indent=4) + "\n")
 
