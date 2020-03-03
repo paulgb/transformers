@@ -424,7 +424,7 @@ def compute_predictions_logits(
                 'tokens': feature.tokens,
                 'start_logits': result.start_logits[:len(feature.tokens)],
                 'end_logits': result.end_logits[:len(feature.tokens)],
-            }+','))
+            })+',')
 
             # if we could have irrelevant answers, get the min score of irrelevant
             if version_2_with_negative:

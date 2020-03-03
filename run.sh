@@ -1,3 +1,4 @@
+#!/bin/bash
 
 /data/anaconda/envs/squad/bin/python ./examples/run_squad.py \
     --model_type bert \
