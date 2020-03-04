@@ -5,7 +5,6 @@ Created on Mon Mar  2 20:46:32 2020
 
 @author: raghuramkowdeed
 """
-
 import logging
 import math
 import os
@@ -17,19 +16,25 @@ from torch.nn import CrossEntropyLoss, MSELoss
 from transformers import BertPreTrainedModel, BertModel
 import torch.nn as nn
 import torch.nn.functional as F
+from copy import deepcopy
 
 class BertForQuestionAnswering2(BertPreTrainedModel):
-    def __init__(self, config, num_heads =1, dropout = 0.1):
+    def __init__(self, config, bert_hidden_states = 4 ,num_heads =1, dropout = 0.1):
+        config = deepcopy(config)
+        config.output_hidden_states = True
         super(BertForQuestionAnswering2, self).__init__(config)
+        
         self.num_labels = config.num_labels
+        self.bert_hidden_states = bert_hidden_states
 
         self.bert = BertModel(config)
         #config.num_labels = 1
         num_labels = 1
         
-        self.qa_outputs = nn.Linear(config.hidden_size*2, num_labels)
-        self.qa_attn = nn.MultiheadAttention(config.hidden_size, num_heads=num_heads, dropout = dropout)
-        self.sm = nn.Softmax(dim=1)
+        self.qa_outputs = nn.Linear(config.hidden_size*self.bert_hidden_states*2, num_labels)
+        self.qa_attn = nn.MultiheadAttention(config.hidden_size*self.bert_hidden_states, 
+                                             num_heads=num_heads, dropout = dropout)
+        self.sm = nn.Sigmoid()
 
         self.init_weights()
 
@@ -94,7 +99,7 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         assert answer == "a nice puppet"
 
         """
-        print('calling new bert qa model')
+        print('calling new bert qa model 3')
         outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
@@ -103,10 +108,16 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
         )
+        print(len(outputs))
+        print( type( outputs[2]) )
+        
+        print(len( outputs[0]), outputs[0].shape, len(outputs[1]), outputs[1].shape, len(outputs[2]), len(outputs[2][0]), outputs[2][0][0].shape )
 
-        sequence_output = outputs[0]
+        sequence_output = (outputs[0], ) + outputs[2][0:(self.bert_hidden_states-1)] 
+        sequence_output = torch.cat( sequence_output ,dim=2)
         
         #q_mask is used to mask words from paragraph and use words from question compute attention.
+        context_mask = attention_mask * token_type_ids
         q_mask = ( attention_mask == 0 ) | (token_type_ids == 1)
         #q_mask[:,0] = False 
         
@@ -124,7 +135,7 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         
         log_prob = torch.log(prob)
         log_non_prob = torch.log(non_prob)
-        #print(sequence_output.shape, q_mask.shape, prob.shape)
+        print(sequence_output.shape, q_mask.shape, prob.shape)
 
         outputs = (prob, non_prob,) + outputs[2:]
         if start_positions is not None and end_positions is not None:
@@ -145,10 +156,13 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
                 e_i = int(end_positions[i].data.tolist()) + 1
                 mem_mask[i,s_i:e_i] = 1.0 
 
-            mem_mask = torch.Tensor(mem_mask)
-            non_mem_mask = 1 - mem_mask
+
+            mem_mask = torch.Tensor(mem_mask) * context_mask
+            non_mem_mask = ( 1 - mem_mask ) * context_mask
             
-            total_loss = (log_prob * mem_mask).sum() + (log_non_prob*non_mem_mask).sum()
+
+            total_loss = (log_prob * mem_mask).sum(dim=1) + (log_non_prob*non_mem_mask).sum(dim=1)
+            total_loss = ( total_loss / context_mask.sum(dim=1) ).mean()
             #total_loss = torch.trace(torch.mm( prob,mem_mask)) + torch.trace(torch.mm(prob,non_mem_mask ) )
             total_loss = total_loss * -1.0 / prob.shape[1]
             
