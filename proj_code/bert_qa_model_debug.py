@@ -12,7 +12,8 @@ import os
 
 import torch
 from torch import nn
-from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import CrossEntropyLoss, MSELoss, BCELoss, BCEWithLogitsLoss
+
 
 from transformers import BertPreTrainedModel, BertModel
 import torch.nn as nn
@@ -26,8 +27,7 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         config.output_hidden_states = True
         super(BertForQuestionAnswering2, self).__init__(config)
         self.bert_hidden_states = bert_hidden_states
-        self.num_labels = 1
-        #config.num_labels
+        self.num_labels = config.num_labels
         
         self.bert = BertModel(config)
         
@@ -110,11 +110,11 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
         )
-        print('debug')
-        print(len(outputs))
-        print( type( outputs[2]) )
+        #print('debug')
+        #print(len(outputs))
+        #print( type( outputs[2]) )
         
-        print(len( outputs[0]), outputs[0].shape, len(outputs[1]), outputs[1].shape, len(outputs[2]), len(outputs[2][0]), outputs[2][0][0].shape )
+        #print(len( outputs[0]), outputs[0].shape, len(outputs[1]), outputs[1].shape, len(outputs[2]), len(outputs[2][0]), outputs[2][0][0].shape )
 
         sequence_output = (outputs[0], ) + outputs[2][0:(self.bert_hidden_states-1)] 
         sequence_output = torch.cat( sequence_output ,dim=2)
@@ -130,21 +130,13 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         sequence_output_attn = sequence_output_attn.permute(1,0,2)
         
         sequence_output = torch.cat((sequence_output, sequence_output_attn), 2)
-
+        
         logits = self.qa_outputs(sequence_output)
-        start_logits = logits.squeeze(-1)
-        
-        probs = self.sm(start_logits)
-        non_probs = 1 - probs
-        log_probs = torch.log(probs)
-        non_log_probs = torch.log(non_probs)
+        start_logits, end_logits = logits.split(1, dim=-1)
+        start_logits = start_logits.squeeze(-1)
+        end_logits = end_logits.squeeze(-1)
 
-        
-        #start_logits, end_logits = logits.split(1, dim=-1)
-        #start_logits = start_logits.squeeze(-1)
-        #end_logits = end_logits.squeeze(-1)
-
-        outputs = (log_probs, non_log_probs,) + outputs[2:]
+        outputs = (start_logits, end_logits,) + outputs[2:]
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
             if len(start_positions.size()) > 1:
@@ -155,35 +147,12 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
             ignored_index = start_logits.size(1)
             start_positions.clamp_(0, ignored_index)
             end_positions.clamp_(0, ignored_index)
-            
-            print('start pos')
-            print(start_positions)
-            print(end_positions)
-            mem_mask = np.zeros(start_logits.shape)
-           #set mem_mask = 1 for words inside answer
-            for i in range(start_logits.shape[0]):
-                s_i = int(start_positions[i].data.tolist())
-                e_i = int(end_positions[i].data.tolist()) + 1
-                mem_mask[i,s_i:e_i] = 1.0 
-                
-            mem_mask = torch.Tensor(mem_mask)
-            non_mem_mask = ( 1 - mem_mask )
 
-
-            #loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
-            #start_loss = loss_fct(start_logits, start_positions)
-            #end_loss = loss_fct(end_logits, end_positions)
-            #total_loss = (start_loss + end_loss) / 2
-            #outputs = (total_loss,) + outputs
-            
-            
-            total_loss = (log_probs * mem_mask).sum(dim=1) + (non_log_probs*non_mem_mask).sum(dim=1)
-            total_loss = ( total_loss  ).sum()
-            #total_loss = torch.trace(torch.mm( prob,mem_mask)) + torch.trace(torch.mm(prob,non_mem_mask ) )
-            total_loss = total_loss * -1.0
-
+            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+            start_loss = loss_fct(start_logits, start_positions)
+            end_loss = loss_fct(end_logits, end_positions)
+            total_loss = (start_loss + end_loss) / 2
             outputs = (total_loss,) + outputs
-            
-            
 
         return outputs  # (loss), start_logits, end_logits, (hidden_states), (attentions)
+

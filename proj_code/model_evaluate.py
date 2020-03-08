@@ -235,10 +235,10 @@ def compute_predictions_logits_2(
                     min_null_feature_index = feature_index
                     null_start_logit = result.start_logits[0]
                     null_end_logit = result.end_logits[0]
-            print('res.logit')
-            print(  result.start_logits) 
-            print(result.end_logits)
-            print('-------')
+            #print('res.logit')
+            #print(  result.start_logits) 
+            #print(result.end_logits)
+            #print('-------')
         
             for start_index in start_indexes:
                 for end_index in end_indexes:
@@ -261,14 +261,14 @@ def compute_predictions_logits_2(
                     if length > max_answer_length:
                         continue
                     
-                    score1 = np.sum(result.start_logits[start_index:(end_index+1)],) 
-                    score2 = np.sum(result.end_logits[:start_index],) 
-                    score3 = np.sum(result.end_logits[(end_index+1):],) 
-                    score = score1+ score2+ score3
+                    score = np.mean(result.start_logits[start_index:(end_index+1)],) 
+                    #score2 = np.sum(result.end_logits[:start_index],) 
+                    #score3 = np.sum(result.end_logits[(end_index+1):],) 
+                    #score = score1+ score2+ score3
                     
                     
                     print('stats')
-                    print(start_index, end_index, score1, score2, score3, score)
+                    print(start_index, end_index, score)
                     
                     
                     prelim_predictions.append(
