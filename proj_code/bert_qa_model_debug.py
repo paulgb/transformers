@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Mon Mar  2 20:46:32 2020
+Created on Sun Mar  8 08:54:59 2020
 
 @author: raghuramkowdeed
 """
+
 import logging
 import math
 import os
@@ -17,28 +18,29 @@ from transformers import BertPreTrainedModel, BertModel
 import torch.nn as nn
 import torch.nn.functional as F
 from copy import deepcopy
+import numpy as np
 
 class BertForQuestionAnswering2(BertPreTrainedModel):
     def __init__(self, config, bert_hidden_states = 4 ,num_heads =1, dropout = 0.1):
         config = deepcopy(config)
         config.output_hidden_states = True
         super(BertForQuestionAnswering2, self).__init__(config)
-        
-        self.num_labels = config.num_labels
         self.bert_hidden_states = bert_hidden_states
-
-        self.bert = BertModel(config)
-        #config.num_labels = 1
-        num_labels = 1
+        self.num_labels = 1
+        #config.num_labels
         
-        self.qa_outputs = nn.Linear(config.hidden_size*self.bert_hidden_states*2, num_labels)
+        self.bert = BertModel(config)
+        
+        self.qa_outputs = nn.Linear(config.hidden_size*self.bert_hidden_states*2, self.num_labels)
         self.qa_attn = nn.MultiheadAttention(config.hidden_size*self.bert_hidden_states, 
                                              num_heads=num_heads, dropout = dropout)
-        self.sm = nn.Softmax(dim=-1)
+        self.sm = nn.Sigmoid() 
+        #nn.LogSoftmax(dim=-1)
 
         self.init_weights()
 
-    
+
+
     def forward(
         self,
         input_ids=None,
@@ -99,7 +101,7 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         assert answer == "a nice puppet"
 
         """
-        print('calling new bert qa model 3')
+
         outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
@@ -108,6 +110,7 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
         )
+        print('debug')
         print(len(outputs))
         print( type( outputs[2]) )
         
@@ -127,27 +130,21 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         sequence_output_attn = sequence_output_attn.permute(1,0,2)
         
         sequence_output = torch.cat((sequence_output, sequence_output_attn), 2)
-        
+
         logits = self.qa_outputs(sequence_output)
-        logits = logits.squeeze(-1)
-        prob = self.sm(logits)
-        non_prob = 1 - prob
+        start_logits = logits.squeeze(-1)
         
-        #prob = prob * context_mask 
-        #non_prob = non_prob * context_mask
-        
-        log_prob = torch.log(prob)
-        log_non_prob = torch.log(non_prob)
-        print(sequence_output.shape, q_mask.shape, prob.shape)
+        probs = self.sm(start_logits)
+        non_probs = 1 - probs
+        log_probs = torch.log(probs)
+        non_log_probs = torch.log(non_probs)
 
-
-        outputs = (prob, non_prob,) + outputs[2:]
-        print('non prob')
-        print(non_prob.mean(dim=-1))
-        print(start_positions[0])
-        print(end_positions[0])
-        print('---------')
         
+        #start_logits, end_logits = logits.split(1, dim=-1)
+        #start_logits = start_logits.squeeze(-1)
+        #end_logits = end_logits.squeeze(-1)
+
+        outputs = (log_probs, non_log_probs,) + outputs[2:]
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
             if len(start_positions.size()) > 1:
@@ -155,27 +152,38 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
             if len(end_positions.size()) > 1:
                 end_positions = end_positions.squeeze(-1)
             # sometimes the start/end positions are outside our model inputs, we ignore these terms
-            ignored_index = prob.size(1)
+            ignored_index = start_logits.size(1)
             start_positions.clamp_(0, ignored_index)
             end_positions.clamp_(0, ignored_index)
             
-            mem_mask = np.zeros(prob.shape)
+            print('start pos')
+            print(start_positions)
+            print(end_positions)
+            mem_mask = np.zeros(start_logits.shape)
            #set mem_mask = 1 for words inside answer
-            for i in range(prob.shape[0]):
+            for i in range(start_logits.shape[0]):
                 s_i = int(start_positions[i].data.tolist())
                 e_i = int(end_positions[i].data.tolist()) + 1
                 mem_mask[i,s_i:e_i] = 1.0 
+                
+            mem_mask = torch.Tensor(mem_mask)
+            non_mem_mask = ( 1 - mem_mask )
 
 
-            mem_mask = torch.Tensor(mem_mask) * context_mask
-            non_mem_mask = ( 1 - mem_mask ) * context_mask
+            #loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+            #start_loss = loss_fct(start_logits, start_positions)
+            #end_loss = loss_fct(end_logits, end_positions)
+            #total_loss = (start_loss + end_loss) / 2
+            #outputs = (total_loss,) + outputs
             
-
-            total_loss = (log_prob * mem_mask).sum(dim=1) + (log_non_prob*non_mem_mask).sum(dim=1)
-            total_loss = ( total_loss / context_mask.sum(dim=1) ).mean()
+            
+            total_loss = (log_probs * mem_mask).sum(dim=1) + (non_log_probs*non_mem_mask).sum(dim=1)
+            total_loss = ( total_loss  ).sum()
             #total_loss = torch.trace(torch.mm( prob,mem_mask)) + torch.trace(torch.mm(prob,non_mem_mask ) )
-            total_loss = total_loss * -1.0 / prob.shape[1]
-            
+            total_loss = total_loss * -1.0
+
             outputs = (total_loss,) + outputs
+            
+            
 
         return outputs  # (loss), start_logits, end_logits, (hidden_states), (attentions)
