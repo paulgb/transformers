@@ -28,6 +28,9 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
+from sys import path
+path.append('/data/home/cs/transformers/proj_code')
+from bert_qa_model_paulschanges_attention import BertForQuestionAnswering2
 
 from transformers import (
     WEIGHTS_NAME,
@@ -82,6 +85,7 @@ ALL_MODELS = sum(
 
 MODEL_CLASSES = {
     "bert": (BertConfig, BertForQuestionAnswering, BertTokenizer),
+    "bert2": (BertConfig, BertForQuestionAnswering2, BertTokenizer),
     "camembert": (CamembertConfig, CamembertForQuestionAnswering, CamembertTokenizer),
     "roberta": (RobertaConfig, RobertaForQuestionAnswering, RobertaTokenizer),
     "xlnet": (XLNetConfig, XLNetForQuestionAnswering, XLNetTokenizer),
@@ -375,7 +379,8 @@ def evaluate(args, model, tokenizer, prefix=""):
                 )
 
             else:
-                start_logits, end_logits = output
+                # start_logits, end_logits = output
+                start_logits, end_logits, _ = output
                 result = SquadResult(unique_id, start_logits, end_logits)
 
             all_results.append(result)
@@ -726,12 +731,15 @@ def main():
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         args.n_gpu = torch.cuda.device_count()
+        print('a', args.n_gpu)
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         torch.distributed.init_process_group(backend="nccl")
         args.n_gpu = 1
+        print('b', args.n_gpu)
     args.device = device
+    print(device)
 
     # Setup logging
     logging.basicConfig(
