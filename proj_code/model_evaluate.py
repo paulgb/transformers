@@ -6,6 +6,8 @@ Created on Sat Mar  7 11:54:44 2020
 @author: raghuramkowdeed
 """
 
+
+
 import collections
 import json
 import logging
@@ -17,6 +19,42 @@ from transformers.tokenization_bert import BasicTokenizer
 
 
 logger = logging.getLogger(__name__)
+
+def get_mle(prob_vec, non_prob_vec):
+    
+    prob_sum = sum( prob_vec )
+    non_prob_sum = sum ( non_prob_vec )
+    
+    
+    best_i = 0
+    best_j = 0
+    best_score = prob_vec[0] + non_prob_sum - non_prob_vec[0]
+    best_score_vec = []
+    best_score_vec.append(best_score)
+    best_score_start_ind_vec = []
+    best_score_start_ind_vec.append(0)
+    
+    for j in range(1, len(prob_vec) ):
+        
+        this_score_1 = prob_vec[j] + non_prob_sum - non_prob_vec[j]
+        this_score_2 = prob_vec[j] + best_score_vec[j-1] - non_prob_vec[j]
+        
+        this_best_score = this_score_1
+        this_i = j
+        if this_score_1 <= this_score_2 :
+            this_i = best_score_start_ind_vec[j-1]
+            this_best_score = this_score_2
+        
+        best_score_start_ind_vec.append(this_i)
+        best_score_vec.append(this_best_score)
+        
+        if best_score <= this_best_score :
+            best_score = this_best_score
+            best_i = best_score_start_ind_vec[j]
+            best_j = j
+            
+    return best_i, best_j, best_score        
+
 
 def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
     """Project the tokenized prediction back to the original text."""
@@ -161,7 +199,7 @@ def compute_predictions_logits_2(
     tokenizer,
     
 ):
-    print('calling model eval')
+    print('calling model eval with new loss func')
     """Write final predictions to the json file and log-odds of null if needed."""
     logger.info("Writing predictions to: %s" % (output_prediction_file))
     logger.info("Writing nbest to: %s" % (output_nbest_file))
@@ -185,6 +223,8 @@ def compute_predictions_logits_2(
     print('[')
     for (example_index, example) in enumerate(all_examples):
         features = example_index_to_features[example_index]
+        print('fea')
+        print(len(features))
 
         prelim_predictions = []
         # keep track of the minimum score of null start+end of position 0
@@ -192,24 +232,13 @@ def compute_predictions_logits_2(
         min_null_feature_index = 0  # the paragraph slice with min null score
         null_start_logit = 0  # the start logit at the slice with min null score
         null_end_logit = 0  # the end logit at the slice with min null score
+        
         for (feature_index, feature) in enumerate(features):
             result = unique_id_to_result[feature.unique_id]
-            print('result')
-            #print(result)
-            
-            #print(result.start_logits)
-            #print(result.end_logits)
-            
-            #start_indexes = _get_best_indexes(result.start_logits, n_best_size)
-            #end_indexes = _get_best_indexes(result.end_logits, n_best_size)
             
             start_indexes = [ i for i, val in enumerate(result.end_logits) ]
             end_indexes = [ i for i, val in enumerate(result.end_logits) ]
             
-            #print('start_ind')
-            #print(start_indexes)
-            #print('end_ind')
-            #print(end_indexes)
 
             json.dumps({
                 'example_id': example.qas_id,
@@ -219,68 +248,34 @@ def compute_predictions_logits_2(
                 'end_logits': result.end_logits[:len(feature.tokens)],
             })     
             
-            #print(json.dumps({
-            #    'example_id': example.qas_id,
-            #    'feature_index': feature_index,
-            #    'tokens': feature.tokens,
-            #    'start_logits': result.start_logits[:len(feature.tokens)],
-            #    'end_logits': result.end_logits[:len(feature.tokens)],
-            #})+',')
 
             # if we could have irrelevant answers, get the min score of irrelevant
             if version_2_with_negative:
-                feature_null_score = result.start_logits[0] + result.end_logits[0]
+                feature_null_score = sum(result.end_logits) 
                 if feature_null_score < score_null:
                     score_null = feature_null_score
                     min_null_feature_index = feature_index
                     null_start_logit = result.start_logits[0]
                     null_end_logit = result.end_logits[0]
-            #print('res.logit')
-            #print(  result.start_logits) 
-            #print(result.end_logits)
-            #print('-------')
         
-            for start_index in start_indexes:
-                for end_index in end_indexes:
-                    # We could hypothetically create invalid predictions, e.g., predict
-                    # that the start of the span is in the question. We throw out all
-                    # invalid predictions.
-                    if start_index >= len(feature.tokens):
-                        continue
-                    if end_index >= len(feature.tokens):
-                        continue
-                    if start_index not in feature.token_to_orig_map:
-                        continue
-                    if end_index not in feature.token_to_orig_map:
-                        continue
-                    if not feature.token_is_max_context.get(start_index, False):
-                        continue
-                    if end_index < start_index:
-                        continue
-                    length = end_index - start_index + 1
-                    if length > max_answer_length:
-                        continue
-                    
-                    score = np.mean(result.start_logits[start_index:(end_index+1)],) 
-                    #score2 = np.sum(result.end_logits[:start_index],) 
-                    #score3 = np.sum(result.end_logits[(end_index+1):],) 
-                    #score = score1+ score2+ score3
-                    
-                    
-                    print('stats')
-                    print(start_index, end_index, score)
-                    
-                    
-                    prelim_predictions.append(
-                        _PrelimPrediction(
-                            feature_index=feature_index,
-                            start_index=start_index,
-                            end_index=end_index,
-                            start_logit=result.start_logits[start_index],
-                            end_logit=result.end_logits[end_index],
-                            score = score
+            context_start_pos = feature.token_type_ids.index(1)  
+            context_len = feature.paragraph_len
+            start_index, end_index, score = get_mle(result.start_logits[context_start_pos:context_len], result.end_logits[context_start_pos:context_len])
+            start_index = start_index + context_start_pos
+            end_index = end_index + context_start_pos
+            
+            prelim_predictions.append(
+                    _PrelimPrediction(
+                        feature_index=feature_index,
+                        start_index=start_index,
+                        end_index=end_index,
+                        start_logit=result.start_logits[start_index],
+                        end_logit=result.end_logits[end_index],
+                        score = score
                         )
-                    )
+                      )
+            
+            
         if version_2_with_negative:
             prelim_predictions.append(
                 _PrelimPrediction(
@@ -289,22 +284,25 @@ def compute_predictions_logits_2(
                     end_index=0,
                     start_logit=null_start_logit,
                     end_logit=null_end_logit,
+                    score = score_null
                 )
             )
         prelim_predictions = sorted(prelim_predictions, key=lambda x: (x.score), reverse=True)
 
         _NbestPrediction = collections.namedtuple(  # pylint: disable=invalid-name
-            "NbestPrediction", ["text", "start_logit", "end_logit"]
+            "NbestPrediction", ["text", "start_logit", "end_logit", "score"]
         )
 
         seen_predictions = {}
         nbest = []
         for pred in prelim_predictions:
+            print(pred)
             if len(nbest) >= n_best_size:
                 break
             feature = features[pred.feature_index]
             if pred.start_index > 0:  # this is a non-null prediction
                 tok_tokens = feature.tokens[pred.start_index : (pred.end_index + 1)]
+                print(feature.token_to_orig_map)
                 orig_doc_start = feature.token_to_orig_map[pred.start_index]
                 orig_doc_end = feature.token_to_orig_map[pred.end_index]
                 orig_tokens = example.doc_tokens[orig_doc_start : (orig_doc_end + 1)]
@@ -331,28 +329,30 @@ def compute_predictions_logits_2(
                 final_text = ""
                 seen_predictions[final_text] = True
 
-            nbest.append(_NbestPrediction(text=final_text, start_logit=pred.start_logit, end_logit=pred.end_logit))
+            nbest.append(_NbestPrediction(text=final_text, start_logit=pred.start_logit, end_logit=pred.end_logit,
+                                          score=pred.score))
         # if we didn't include the empty option in the n-best, include it
         if version_2_with_negative:
             if "" not in seen_predictions:
-                nbest.append(_NbestPrediction(text="", start_logit=null_start_logit, end_logit=null_end_logit))
+                nbest.append(_NbestPrediction(text="", start_logit=null_start_logit, end_logit=null_end_logit,
+                                              score = score_null))
 
             # In very rare edge cases we could only have single null prediction.
             # So we just create a nonce prediction in this case to avoid failure.
             if len(nbest) == 1:
-                nbest.insert(0, _NbestPrediction(text="empty", start_logit=0.0, end_logit=0.0))
+                nbest.insert(0, _NbestPrediction(text="empty", start_logit=0.0, end_logit=0.0, score = score_null))
 
         # In very rare edge cases we could have no valid predictions. So we
         # just create a nonce prediction in this case to avoid failure.
         if not nbest:
-            nbest.append(_NbestPrediction(text="empty", start_logit=0.0, end_logit=0.0))
+            nbest.append(_NbestPrediction(text="empty", start_logit=0.0, end_logit=0.0, score = score_null))
 
         assert len(nbest) >= 1
 
         total_scores = []
         best_non_null_entry = None
         for entry in nbest:
-            total_scores.append(entry.start_logit + entry.end_logit)
+            total_scores.append(entry.score)
             if not best_non_null_entry:
                 if entry.text:
                     best_non_null_entry = entry
@@ -366,6 +366,7 @@ def compute_predictions_logits_2(
             output["probability"] = probs[i]
             output["start_logit"] = entry.start_logit
             output["end_logit"] = entry.end_logit
+            output['score'] = entry.score 
             nbest_json.append(output)
 
         assert len(nbest_json) >= 1

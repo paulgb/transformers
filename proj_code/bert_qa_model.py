@@ -34,9 +34,11 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         self.qa_outputs = nn.Linear(config.hidden_size*self.bert_hidden_states*2, num_labels)
         self.qa_attn = nn.MultiheadAttention(config.hidden_size*self.bert_hidden_states, 
                                              num_heads=num_heads, dropout = dropout)
-        self.sm = nn.Softmax(dim=-1)
+        self.sm = nn.Sigmoid()
 
         self.init_weights()
+        self.qa_outputs.bias.data.fill_(1.0)
+
 
     
     def forward(
@@ -99,7 +101,7 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         assert answer == "a nice puppet"
 
         """
-        print('calling new bert qa model 3')
+        print('calling new bert qa model 3 with loss func')
         outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
@@ -141,11 +143,13 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
         print(sequence_output.shape, q_mask.shape, prob.shape)
 
 
-        outputs = (prob, non_prob,) + outputs[2:]
+        outputs = (log_prob, log_non_prob,) + outputs[2:]
         print('non prob')
+        print(prob.mean(dim=-1))
         print(non_prob.mean(dim=-1))
-        print(start_positions[0])
-        print(end_positions[0])
+        
+        print(start_positions)
+        print(end_positions)
         print('---------')
         
         if start_positions is not None and end_positions is not None:
@@ -170,11 +174,45 @@ class BertForQuestionAnswering2(BertPreTrainedModel):
             mem_mask = torch.Tensor(mem_mask) * context_mask
             non_mem_mask = ( 1 - mem_mask ) * context_mask
             
-
-            total_loss = (log_prob * mem_mask).sum(dim=1) + (log_non_prob*non_mem_mask).sum(dim=1)
-            total_loss = ( total_loss / context_mask.sum(dim=1) ).mean()
+            l1 = 0
+            c1 = 0
+            l2 = 0
+            c2 = 0
+            
+            t_s = mem_mask.shape[1]
+            for i in range(log_prob.shape[0]):
+                m1 = mem_mask[i,:].sum()
+                m2 = non_mem_mask[i,:].sum()
+                
+                print(l1,m1, l2, m2)
+                
+                if m1 > 0 :
+                    l1 = l1 + ( (log_prob[i,:]*mem_mask[i,:]).mean() *(t_s/ m1 ) )
+                    c1 = c1 + 1.0
+                if m2 > 0 :
+                    l2 = l2 + ( (log_non_prob[i,:]*non_mem_mask[i,:]).mean() *(t_s/m2) )
+                    c2 = c2 + 1.0
+                    
+            if c1 >0 :
+               l1 = l1 *-1.0 /c1
+            else : 
+                l1 = 0.0
+            if c2>0 :    
+               l2 = l2 * -1.0 /c2
+            else : 
+                l2 = 0.0
+            #l1 = ((log_prob * mem_mask).sum(dim=1)/mem_mask.sum(dim=1) ).mean() * -1.0
+            #l2 = ((log_non_prob*non_mem_mask).sum(dim=1)/non_mem_mask.sum(dim=1)) .mean() * -1.0
+            
+            print('loss')
+            print(l1, l2)
+            
+            total_loss = l1 + l2
+            
+            #total_loss = (log_prob * mem_mask).sum(dim=1) + (log_non_prob*non_mem_mask).sum(dim=1)
+            #total_loss = ( total_loss / context_mask.sum(dim=1) ).mean()
             #total_loss = torch.trace(torch.mm( prob,mem_mask)) + torch.trace(torch.mm(prob,non_mem_mask ) )
-            total_loss = total_loss * -1.0 / prob.shape[1]
+            #total_loss = total_loss * -1.0 
             
             outputs = (total_loss,) + outputs
 
